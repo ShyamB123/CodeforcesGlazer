@@ -579,19 +579,24 @@
             
             // Format and display content directly - no slider
             let contentHtml = '';
+            let rawContent = '';
             
             if (data.content) {
-                contentHtml = formatBlogContent(data.content, username);
+                rawContent = data.content;
             } else if (data.message) {
-                contentHtml = formatBlogContent(data.message, username);
+                rawContent = data.message;
             } else if (data.response) {
-                contentHtml = formatBlogContent(data.response, username);
+                rawContent = data.response;
             } else {
                 // Handle different data structures
-                contentHtml = `
-                    <p>Hello <strong>${username}</strong>! Here's your personalized response:</p>
-                    <div style="background: rgba(30, 31, 26, 0.9); padding: 1.5rem; border-radius: 10px; margin: 1.5rem 0; border: 1px solid #49483e; font-family: monospace; white-space: pre-wrap;">${JSON.stringify(data, null, 2)}</div>
-                `;
+                rawContent = JSON.stringify(data, null, 2);
+            }
+            
+            // For very long text without proper formatting, add intelligent paragraph breaks
+            if (rawContent.length > 500 && !rawContent.includes('\n\n') && !rawContent.includes('<p>')) {
+                contentHtml = formatLongText(rawContent, username);
+            } else {
+                contentHtml = formatBlogContent(rawContent, username);
             }
             
             // Display content immediately - no animation or slider
@@ -609,40 +614,99 @@
             updateReadingStats();
         }
 
+        // Special function for formatting very long text blocks
+        function formatLongText(content, username) {
+            let formattedContent = content;
+            
+            // Replace username placeholder
+            formattedContent = formattedContent.replace(/\{username\}/g, `<strong>${username}</strong>`);
+            
+            // Split very long sentences into paragraphs at logical points
+            formattedContent = formattedContent
+                // Add breaks after sentences that end with punctuation followed by a capital letter
+                .replace(/([.!?])\s+([A-Z][a-z])/g, '$1</p>\n\n<p>$2')
+                // Add breaks at specific phrases that indicate new topics
+                .replace(/(Today,|Furthermore,|Moreover,|Additionally,|However,|Meanwhile,|In conclusion,|Finally,)\s+/g, '</p>\n\n<p>$1 ')
+                // Add breaks before quotes
+                .replace(/\s+"([^"]+)"/g, '</p>\n\n<blockquote>$1</blockquote>\n\n<p>')
+                // Clean up and format emphasis
+                .replace(/\*\*([^*]+)\*\*/g, '<strong style="color: #a6e22e;">$1</strong>')
+                .replace(/\*([^*\n]+)\*/g, '<em style="color: #fd971f;">$1</em>');
+            
+            // Wrap in initial paragraph tag
+            formattedContent = '<p>' + formattedContent + '</p>';
+            
+            // Clean up any empty paragraphs or malformed HTML
+            formattedContent = formattedContent
+                .replace(/<p>\s*<\/p>/g, '')
+                .replace(/<p>\s*<p>/g, '<p>')
+                .replace(/<\/p>\s*<\/p>/g, '</p>')
+                .replace(/<p>(\s*<blockquote>)/g, '$1')
+                .replace(/(<\/blockquote>\s*)<\/p>/g, '$1');
+            
+            return formattedContent;
+        }
+
         // Format content for blog display
         function formatBlogContent(content, username) {
-            // Escape HTML to prevent XSS
-            let formattedContent = escapeHtml(content);
+            // Don't escape HTML initially to preserve formatting
+            let formattedContent = content;
             
             // Replace username placeholder if it exists
             formattedContent = formattedContent.replace(/\{username\}/g, `<strong>${username}</strong>`);
             
-            // Convert markdown-style formatting
+            // Handle different paragraph separators and clean up the text
             formattedContent = formattedContent
-                // Bold text
-                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-                // Italic text
-                .replace(/\*(.*?)\*/g, '<em>$1</em>')
-                // Code blocks
-                .replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>')
-                // Inline code
-                .replace(/`([^`]+)`/g, '<code>$1</code>');
+                // Replace multiple spaces with single spaces
+                .replace(/\s+/g, ' ')
+                // Handle different line break patterns
+                .replace(/\\n\\n/g, '\n\n')  // Double escaped newlines
+                .replace(/\\n/g, '\n')       // Single escaped newlines
+                // Split into sentences and create better paragraph breaks
+                .replace(/\.\s+([A-Z])/g, '.\n\n$1')  // Add paragraph breaks after sentences starting with capital letters
+                // Handle specific patterns that indicate new paragraphs
+                .replace(/!\s+([A-Z])/g, '!\n\n$1')   // After exclamation marks
+                .replace(/\?\s+([A-Z])/g, '?\n\n$1')  // After question marks
+                // Handle special markers that indicate sections
+                .replace(/\*\*([^*]+)\*\*/g, '\n\n<h3>$1</h3>\n\n')  // Convert **text** to headings
+                .replace(/\*([^*\n]+)\*/g, '<em>$1</em>')             // Convert *text* to italic
+                // Clean up multiple newlines
+                .replace(/\n{3,}/g, '\n\n');
             
-            // Convert line breaks to paragraphs
+            // Split into paragraphs more intelligently
             const paragraphs = formattedContent
                 .split(/\n\s*\n/)
                 .map(paragraph => paragraph.trim())
                 .filter(paragraph => paragraph.length > 0);
             
-            if (paragraphs.length > 1) {
-                formattedContent = paragraphs
-                    .map(paragraph => `<p>${paragraph.replace(/\n/g, '<br>')}</p>`)
-                    .join('');
-            } else if (paragraphs.length === 1) {
-                formattedContent = `<p>${paragraphs[0].replace(/\n/g, '<br>')}</p>`;
-            } else {
-                formattedContent = `<p>${formattedContent.replace(/\n/g, '<br>')}</p>`;
-            }
+            // Process each paragraph
+            const processedParagraphs = paragraphs.map(paragraph => {
+                // Skip if it's already an HTML element
+                if (paragraph.startsWith('<') && paragraph.endsWith('>')) {
+                    return paragraph;
+                }
+                
+                // Handle quotes
+                if (paragraph.startsWith('"') && paragraph.endsWith('"')) {
+                    return `<blockquote>${paragraph.slice(1, -1)}</blockquote>`;
+                }
+                
+                // Regular paragraph
+                return `<p>${paragraph.replace(/\n/g, ' ')}</p>`;
+            });
+            
+            formattedContent = processedParagraphs.join('\n\n');
+            
+            // Post-processing for better readability
+            formattedContent = formattedContent
+                // Add proper spacing around headings
+                .replace(/<h3>/g, '<h3 style="margin-top: 2rem; margin-bottom: 1rem;">')
+                // Improve blockquote styling
+                .replace(/<blockquote>/g, '<blockquote style="margin: 2rem 0; padding: 1.5rem; background: rgba(102, 217, 239, 0.1); border-left: 4px solid #66d9ef; border-radius: 0 10px 10px 0; font-style: italic; color: #66d9ef;">')
+                // Ensure proper paragraph spacing
+                .replace(/<p>/g, '<p style="margin-bottom: 1.5rem; line-height: 1.8;">')
+                // Handle any remaining formatting
+                .replace(/\*\*([^*]+)\*\*/g, '<strong style="color: #a6e22e;">$1</strong>');
             
             return formattedContent;
         }
